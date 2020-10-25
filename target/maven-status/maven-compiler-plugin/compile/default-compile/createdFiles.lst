@@ -1,0 +1,11 @@
+com/anand/movieratings/data/DataLoader.class
+com/anand/movieratings/MovieRatingFunctions.class
+com/anand/movieratings/functions/MappingFunctions.class
+com/anand/movieratings/domain/MovieRating.class
+com/anand/movieratings/config/SparkConfig.class
+com/anand/movieratings/MovieRatingsMain.class
+com/anand/movieratings/functions/MappingFunctions$2.class
+com/anand/movieratings/domain/MovieDetails$Builder.class
+com/anand/movieratings/functions/MappingFunctions$3.class
+com/anand/movieratings/domain/MovieDetails.class
+com/anand/movieratings/functions/MappingFunctions$1.class
