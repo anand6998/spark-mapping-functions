@@ -39,11 +39,19 @@ public class MovieRatingsMain {
         timer.start();
         movieRatingFunctions.testNaiveMappingFunction();
         long timeUsingNaiveMapping = timer.elapsed(TimeUnit.MILLISECONDS);
+        timer.reset();
+
+        timer.start();
+        movieRatingFunctions.testWithInmemoryHashMap();
+        long timeUsingInMemoryHashMap = timer.elapsed(TimeUnit.MILLISECONDS);
+        timer.reset();
+
 
         System.out.println("Time using intelligent mapping : " + timeUsingIntelligentMapping);
         System.out.println("Time using naive mapping : " + timeUsingNaiveMapping);
         System.out.println("Time using datasets : " + timeUsingDatasets);
         System.out.println("Time using broadcast : " + timeUsingBroadcast);
+        System.out.println("Time using in-memory hashmap : " + timeUsingInMemoryHashMap);
         timer.reset();
 
 

@@ -11,6 +11,7 @@ import com.anand.movieratings.domain.MappedMovieObject;
 import com.anand.movieratings.domain.MovieDetails;
 import com.anand.movieratings.domain.MovieRating;
 import com.anand.movieratings.functions.MappingFunctions;
+import com.clearspring.analytics.util.Lists;
 import com.google.common.collect.Maps;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkContext;
@@ -22,6 +23,7 @@ import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.catalyst.encoders.RowEncoder;
+import org.apache.spark.sql.sources.In;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructType;
 import org.redisson.Redisson;
@@ -36,8 +38,8 @@ import scala.Int;
 
 import javax.annotation.PostConstruct;
 import java.io.Serializable;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Component
 public class MovieRatingFunctions implements Serializable {
@@ -75,21 +77,18 @@ public class MovieRatingFunctions implements Serializable {
                 .config(sparkConf)
                 .getOrCreate();
 
-        sparkSession.sparkContext().hadoopConfiguration().set("fs.s3a.access.key", awsAccessKey);
-        sparkSession.sparkContext().hadoopConfiguration().set("fs.s3a.secret.key", awsSecretKey);
-        sparkSession.sparkContext().hadoopConfiguration().set("fs.s3a.endpoint", AWS_ENDPOINT);
+        final SparkContext sparkContext = sparkSession.sparkContext();
+        final JavaSparkContext jsc = JavaSparkContext.fromSparkContext(sparkContext);
+
+        sparkContext.hadoopConfiguration().set("fs.s3a.access.key", awsAccessKey);
+        sparkContext.hadoopConfiguration().set("fs.s3a.secret.key", awsSecretKey);
+        sparkContext.hadoopConfiguration().set("fs.s3a.endpoint", AWS_ENDPOINT);
 
         final Dataset<Row> movieRatingsRawDs = sparkSession.read().text("s3a://aa-movie-ratings/u.data");
 
         final Dataset<MovieRating> movieRatingDs = movieRatingsRawDs.map(
                 MappingFunctions.mapMovieRatingFunction(),
                 Encoders.bean(MovieRating.class));
-
-        StructType customStructType = new StructType();
-        customStructType = customStructType.add("MovieId", DataTypes.IntegerType, false);
-        customStructType = customStructType.add("UserId", DataTypes.IntegerType, false);
-        customStructType = customStructType.add("MovieRating", DataTypes.IntegerType, false);
-        customStructType = customStructType.add("MovieTitle", DataTypes.StringType, false);
 
         final Config config = new Config();
         config.useSingleServer().setAddress(redisHostUrl);
@@ -103,13 +102,9 @@ public class MovieRatingFunctions implements Serializable {
             movieDetailsMap.put(entry.getKey(), entry.getValue());
         }
 
-        final SparkContext sparkContext = sparkSession.sparkContext();
-        final JavaSparkContext jsc = JavaSparkContext.fromSparkContext(sparkContext);
-
         //Broadcast the dataset
         final Broadcast<Map<Integer, MovieDetails>> movieDetailsBroadcastMap =
                 jsc.broadcast(movieDetailsMap);
-
 
         final Dataset<MappedMovieObject> mappedDs = movieRatingDs.map(
                 MappingFunctions.mapUsingBroadcastFunction(movieDetailsBroadcastMap),
@@ -120,7 +115,7 @@ public class MovieRatingFunctions implements Serializable {
 
         sparkSession.sql("SELECT DISTINCT MovieId, MovieTitle FROM mappedMovieTable").orderBy("movieId").show(false);
 
-        sparkSession.close();
+        client.shutdown();
         sparkSession.stop();
 
     }
@@ -187,6 +182,75 @@ public class MovieRatingFunctions implements Serializable {
 
         sparkSession.sql("SELECT DISTINCT MovieId, MovieTitle FROM mappedMovieTable").orderBy("movieId").show(false);
         sparkSession.stop();
+
+    }
+
+    public void testWithInmemoryHashMap() throws Exception {
+        final SparkSession sparkSession = SparkSession
+                .builder()
+                .config(sparkConf)
+                .config("spark.redis.host", sparkRedisHost)
+                .config("spark.redis.port", sparkRedisPort)
+                .getOrCreate();
+
+        sparkSession.sparkContext().hadoopConfiguration().set("fs.s3a.access.key", awsAccessKey);
+        sparkSession.sparkContext().hadoopConfiguration().set("fs.s3a.secret.key", awsSecretKey);
+        sparkSession.sparkContext().hadoopConfiguration().set("fs.s3a.endpoint", AWS_ENDPOINT);
+
+        final Dataset<Row> movieRatingsRawDs = sparkSession.read().text("s3a://aa-movie-ratings/u.data");
+
+        final Dataset<MovieRating> movieRatingDs = movieRatingsRawDs.map(
+                MappingFunctions.mapMovieRatingFunction(),
+                Encoders.bean(MovieRating.class));
+
+        final Dataset<MovieDetails> movieDetailsDs = sparkSession.read()
+                .format("org.apache.spark.sql.redis")
+                .option("table", "tblMovieDetails")
+                .option("key.column", "movieId")
+                .load()
+                .as(Encoders.bean(MovieDetails.class));
+
+        final java.util.List<MovieRating> movieRatings = movieRatingDs.collectAsList();
+        final java.util.List<MovieDetails> movieDetails = movieDetailsDs.collectAsList();
+
+        final Map<Integer, MovieDetails> movieDetailsMap = movieDetails.stream().collect(Collectors.toMap(x -> x.getMovieId(), x -> x));
+
+        System.out.println(movieRatings.size());
+        System.out.println(movieDetails.size());
+
+        final Map<Integer, String> movieObjectMap = Maps.newHashMap();
+
+        for (MovieRating movieRating : movieRatings) {
+            final Integer movieId = movieRating.getMovieId();
+
+            String movieTitle = "N/A";
+            if (movieDetailsMap.containsKey(movieId)) {
+                movieTitle = movieDetailsMap.get(movieId).getMovieTitle();
+            }
+
+            movieObjectMap.put(movieId, movieTitle);
+        }
+
+        List<Map.Entry<Integer, String>> mapList = new LinkedList<>(movieObjectMap.entrySet());
+        Collections.sort(mapList,
+                new Comparator<Map.Entry<Integer, String>>() {
+                    @Override
+                    public int compare(Map.Entry<Integer, String> o1, Map.Entry<Integer, String> o2) {
+                        return o1.getKey().compareTo( o2.getKey());
+                    }
+                });
+
+        int i = 20;
+        for (Map.Entry<Integer, String> entry: mapList) {
+            //resultMap.put(entry.getKey(), entry.getValue());
+            System.out.println(entry.getKey() + "| " + entry.getValue());
+            i -= 1;
+            if (i == 0) {
+                break;
+            }
+        }
+        sparkSession.stop();
+
 
     }
 

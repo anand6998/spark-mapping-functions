@@ -76,7 +76,7 @@ public class MappingFunctions {
                     return rowList.iterator();
                 } catch (Exception ex) {
                     ex.printStackTrace();
-                    List<Row> list = Lists.newArrayList();
+                    final List<Row> list = Lists.newArrayList();
                     return list.iterator();
                 } finally {
                     client.shutdown();
